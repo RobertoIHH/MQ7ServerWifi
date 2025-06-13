@@ -118,6 +118,7 @@
     </div>
     
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.7.1/chart.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@2.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
     <script>
         // Colores para cada tipo de gas
         const gasColors = {
@@ -203,9 +204,14 @@
                 const detailResponse = await fetch(`/api/history/${date}`);
                 const detailData = await detailResponse.json();
                 
-                if (detailData.data && detailData.data.length > 0) {
-                    updateChart(detailData.data, date);
+                console.log('Datos recibidos:', detailData); // Debug
+                
+                // IMPORTANTE: La respuesta tiene la estructura {date, data, count}
+                // Necesitamos acceder a detailData.data
+                if (detailData && detailData.data && detailData.data.length > 0) {
+                    updateChart(detailData.data, date); // Pasar detailData.data, no detailData
                     document.getElementById('download-data').disabled = false;
+                    addMessage(`Mostrando ${detailData.count || detailData.data.length} mediciones del ${formatDate(date)}`);
                 } else {
                     addMessage('No hay datos detallados para esta fecha');
                     document.getElementById('download-data').disabled = true;
@@ -261,22 +267,32 @@
             
             // Organizar datos por tipo de gas
             const gasSeries = {};
-            const timestamps = [];
-            const displayTimes = [];
+            const allTimestamps = new Set();
             
-            // Extraer todas las marcas de tiempo y organizarlas
+            // Procesar los datos
             data.forEach(record => {
-                const timestamp = new Date(record.timestamp);
+                // Usar serverTimestamp si está disponible, si no, crear uno basado en timestamp
+                let timestamp;
+                if (record.serverTimestamp) {
+                    timestamp = new Date(record.serverTimestamp);
+                } else if (record.timestamp) {
+                    // Si es un número (milisegundos), crear fecha
+                    if (typeof record.timestamp === 'number') {
+                        // Asumir que es timestamp del ESP32, crear fecha para hoy
+                        const baseDate = new Date(date + 'T00:00:00');
+                        timestamp = new Date(baseDate.getTime() + record.timestamp);
+                    } else {
+                        timestamp = new Date(record.timestamp);
+                    }
+                } else {
+                    return; // Saltar registros sin timestamp
+                }
                 
-                if (!isNaN(timestamp)) {
-                    timestamps.push(timestamp);
-                    
-                    // Formato de hora para etiquetas (HH:MM:SS)
-                    const timeStr = timestamp.toTimeString().substring(0, 8);
-                    displayTimes.push(timeStr);
+                if (!isNaN(timestamp.getTime())) {
+                    allTimestamps.add(timestamp.getTime());
                     
                     // Organizar datos por tipo de gas
-                    const gasType = record.gasType || 'unknown';
+                    const gasType = record.gasType || record.gas || 'unknown';
                     
                     if (!gasSeries[gasType]) {
                         gasSeries[gasType] = [];
@@ -288,6 +304,9 @@
                     });
                 }
             });
+            
+            // Convertir timestamps a array ordenado
+            const sortedTimestamps = Array.from(allTimestamps).sort((a, b) => a - b);
             
             // Preparar datasets para el gráfico
             const datasets = [];
@@ -349,10 +368,6 @@
                     }
                 }
             });
-            
-            // Actualizar mensaje
-            const totalPoints = data.length;
-            addMessage(`Mostrando ${totalPoints} mediciones del ${formatDate(date)}`);
         }
         
         // Formatear fecha YYYY-MM-DD a DD/MM/YYYY
@@ -378,11 +393,12 @@
             
             try {
                 const response = await fetch(`/api/history/${date}`);
-                const data = await response.json();
+                const result = await response.json();
                 
-                if (data.data && data.data.length > 0) {
+                // IMPORTANTE: Los datos están en result.data
+                if (result && result.data && result.data.length > 0) {
                     // Crear blob con los datos en formato JSON
-                    const blob = new Blob([JSON.stringify(data.data, null, 2)], { type: 'application/json' });
+                    const blob = new Blob([JSON.stringify(result.data, null, 2)], { type: 'application/json' });
                     const url = URL.createObjectURL(blob);
                     
                     // Crear enlace de descarga
@@ -394,7 +410,7 @@
                     // Liberar URL
                     setTimeout(() => URL.revokeObjectURL(url), 100);
                     
-                    addMessage(`Descargando datos del ${formatDate(date)}...`);
+                    addMessage(`Descargando ${result.count || result.data.length} registros del ${formatDate(date)}...`);
                 }
             } catch (error) {
                 console.error('Error al descargar datos:', error);

@@ -35,6 +35,55 @@ let lastData = {}; // Datos del sensor
 let currentGasType = "CO"; // Tipo de gas actual por defecto
 let sensorStatus = { connected: false }; // Estado del sensor
 
+// Estructuras para almacenar min/max por tipo de gas
+const gasMinMax = {
+  'CO': { min: null, max: null },
+  'H2': { min: null, max: null },
+  'LPG': { min: null, max: null },
+  'CH4': { min: null, max: null },
+  'ALCOHOL': { min: null, max: null }
+};
+
+// Función para actualizar min/max
+function updateMinMax(gasType, ppmValue) {
+  if (!gasMinMax[gasType]) {
+    gasMinMax[gasType] = { min: null, max: null };
+  }
+  
+  const gasStats = gasMinMax[gasType];
+  
+  if (gasStats.min === null || ppmValue < gasStats.min) {
+    gasStats.min = ppmValue;
+  }
+  
+  if (gasStats.max === null || ppmValue > gasStats.max) {
+    gasStats.max = ppmValue;
+  }
+  
+  return gasStats;
+}
+
+// Función para limpiar y validar archivos JSON corruptos
+function cleanJsonFile(fileName) {
+  try {
+    let fileContent = fs.readFileSync(fileName, 'utf8');
+    
+    // Eliminar comas finales antes del cierre del array
+    fileContent = fileContent.replace(/,(\s*\])/, '$1');
+    
+    // Intentar parsear
+    const data = JSON.parse(fileContent);
+    
+    // Si es exitoso, guardar el archivo limpio
+    fs.writeFileSync(fileName, JSON.stringify(data, null, 2));
+    
+    return data;
+  } catch (error) {
+    console.error(`Error al limpiar archivo ${fileName}:`, error);
+    return [];
+  }
+}
+
 // Función para guardar datos del sensor
 function saveSensorData(data) {
   if (!data) return;
@@ -43,12 +92,25 @@ function saveSensorData(data) {
   const now = new Date();
   const dateStr = now.toISOString().split('T')[0]; // Formato YYYY-MM-DD
   
-  // Crear un nuevo objeto con los datos y la hora exacta
+  // Crear un nuevo objeto con los datos
+  // Mantener el timestamp original del ESP32 y agregar uno del servidor
   const recordData = {
-    timestamp: now.toISOString(),
+    timestamp: data.timestamp || Date.now(), // Timestamp del ESP32
+    serverTimestamp: now.toISOString(), // Timestamp del servidor
     gasType: currentGasType,
-    ...data
+    ADC: data.ADC,
+    V: data.V,
+    Rs: data.Rs,
+    'Rs/R0': data['Rs/R0'],
+    ppm: data.ppm,
+    gas: data.gas,
+    gas_index: data.gas_index
   };
+  
+  // Actualizar min/max para el gas actual
+  if (data.ppm !== undefined && data.ppm !== null) {
+    updateMinMax(currentGasType, data.ppm);
+  }
   
   // Nombre del archivo para el día actual
   const fileName = path.join(DATA_DIR, `${dateStr}.json`);
@@ -58,13 +120,11 @@ function saveSensorData(data) {
   
   try {
     if (fs.existsSync(fileName)) {
-      // Si existe, leer el contenido actual
-      const fileContent = fs.readFileSync(fileName, 'utf8');
-      dailyData = JSON.parse(fileContent);
+      // Si existe, intentar leer y limpiar el contenido
+      dailyData = cleanJsonFile(fileName);
     }
   } catch (error) {
     console.error(`Error al leer el archivo ${fileName}:`, error);
-    // Si hay un error, empezamos con un array vacío
     dailyData = [];
   }
   
@@ -74,11 +134,38 @@ function saveSensorData(data) {
   // Guardar el archivo actualizado
   try {
     fs.writeFileSync(fileName, JSON.stringify(dailyData, null, 2));
-    console.log(`Datos guardados en ${fileName}`);
+    console.log(`Datos guardados en ${fileName} - Total registros: ${dailyData.length}`);
   } catch (error) {
     console.error(`Error al guardar en ${fileName}:`, error);
   }
 }
+
+// Al iniciar, cargar los min/max desde los archivos existentes
+function loadMinMaxFromFiles() {
+  try {
+    const files = fs.readdirSync(DATA_DIR);
+    
+    files.forEach(file => {
+      if (file.endsWith('.json')) {
+        const fileName = path.join(DATA_DIR, file);
+        const data = cleanJsonFile(fileName);
+        
+        data.forEach(record => {
+          if (record.gasType && record.ppm !== undefined) {
+            updateMinMax(record.gasType, record.ppm);
+          }
+        });
+      }
+    });
+    
+    console.log('Min/Max cargados:', gasMinMax);
+  } catch (error) {
+    console.error('Error al cargar min/max:', error);
+  }
+}
+
+// Cargar min/max al iniciar
+loadMinMaxFromFiles();
 
 // Ruta para la página principal
 app.get('/', (req, res) => {
@@ -90,7 +177,8 @@ app.get('/api/data', (req, res) => {
   res.json({
     lastData,
     currentGasType,
-    sensorStatus
+    sensorStatus,
+    minMax: gasMinMax[currentGasType] || { min: null, max: null }
   });
 });
 
@@ -171,10 +259,10 @@ app.get('/api/history/:date', (req, res) => {
       return res.status(404).json({ error: 'No hay datos para esta fecha' });
     }
     
-    const fileContent = fs.readFileSync(fileName, 'utf8');
-    const data = JSON.parse(fileContent);
+    // Leer y limpiar el archivo
+    const data = cleanJsonFile(fileName);
     
-    res.json({ date, data });
+    res.json({ date, data, count: data.length });
   } catch (error) {
     console.error(`Error al leer datos para ${date}:`, error);
     res.status(500).json({ error: 'Error al leer datos históricos' });
@@ -197,14 +285,14 @@ app.get('/api/history/:date/summary', (req, res) => {
       return res.status(404).json({ error: 'No hay datos para esta fecha' });
     }
     
-    const fileContent = fs.readFileSync(fileName, 'utf8');
-    const data = JSON.parse(fileContent);
+    // Leer y limpiar el archivo
+    const data = cleanJsonFile(fileName);
     
     // Crear resumen por tipo de gas
     const summary = {};
     
     data.forEach(record => {
-      const gasType = record.gasType || 'unknown';
+      const gasType = record.gasType || record.gas || 'unknown';
       
       if (!summary[gasType]) {
         summary[gasType] = {
@@ -239,7 +327,7 @@ app.get('/api/history/:date/summary', (req, res) => {
       delete summary[gasType].sum;
     });
     
-    res.json({ date, summary });
+    res.json({ date, summary, totalRecords: data.length });
   } catch (error) {
     console.error(`Error al leer resumen para ${date}:`, error);
     res.status(500).json({ error: 'Error al procesar datos históricos' });
@@ -261,7 +349,9 @@ wss.on('connection', (ws, req) => {
       type: 'data_update',
       data: lastData,
       currentGasType: currentGasType,
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      min: gasMinMax[currentGasType]?.min,
+      max: gasMinMax[currentGasType]?.max
     }));
   }
   
@@ -291,6 +381,9 @@ wss.on('connection', (ws, req) => {
         // Guardar los datos del sensor en archivo
         saveSensorData(lastData);
         
+        // Obtener min/max actuales
+        const currentMinMax = gasMinMax[currentGasType] || { min: null, max: null };
+        
         // Difundir el mensaje a todos los clientes de tipo app
         connectedClients.forEach(client => {
           if (client !== ws && client.type !== 'sensor' && client.readyState === WebSocket.OPEN) {
@@ -298,7 +391,9 @@ wss.on('connection', (ws, req) => {
               type: 'data_update',
               data: lastData,
               currentGasType: currentGasType,
-              timestamp: Date.now()
+              timestamp: Date.now(),
+              min: currentMinMax.min,
+              max: currentMinMax.max
             }));
           }
         });
@@ -328,12 +423,17 @@ wss.on('connection', (ws, req) => {
           }
         });
         
+        // Obtener min/max para el nuevo gas
+        const newMinMax = gasMinMax[gas] || { min: null, max: null };
+        
         // Confirmar al cliente app que envió el comando
         ws.send(JSON.stringify({
           type: 'command_sent',
           command: 'change_gas',
           gas: gas,
-          timestamp: Date.now()
+          timestamp: Date.now(),
+          min: newMinMax.min,
+          max: newMinMax.max
         }));
       }
       // Si recibimos confirmación de cambio de gas desde el sensor
@@ -342,13 +442,18 @@ wss.on('connection', (ws, req) => {
         if (parsedMessage.success && parsedMessage.to) {
           currentGasType = parsedMessage.to;
           
+          // Obtener min/max para el nuevo gas
+          const currentMinMax = gasMinMax[currentGasType] || { min: null, max: null };
+          
           // Notificar a todos los clientes app sobre el cambio
           connectedClients.forEach(client => {
             if (client.type !== 'sensor' && client.readyState === WebSocket.OPEN) {
               client.send(JSON.stringify({
                 type: 'gas_changed',
                 gas: currentGasType,
-                timestamp: Date.now()
+                timestamp: Date.now(),
+                min: currentMinMax.min,
+                max: currentMinMax.max
               }));
             }
           });
@@ -381,12 +486,17 @@ wss.on('connection', (ws, req) => {
       }
       // Comandos de la aplicación cliente (que no son de cambio de gas)
       else if (parsedMessage.command === 'get_status') {
+        // Obtener min/max actuales
+        const currentMinMax = gasMinMax[currentGasType] || { min: null, max: null };
+        
         // Enviar el estado actual al cliente
         ws.send(JSON.stringify({
           type: 'sensor_status',
           status: sensorStatus,
           currentGasType: currentGasType,
-          timestamp: Date.now()
+          timestamp: Date.now(),
+          min: currentMinMax.min,
+          max: currentMinMax.max
         }));
       }
       
@@ -443,4 +553,5 @@ setInterval(() => {
 server.listen(port, () => {
   console.log(`Servidor Gas Sensor WebSocket escuchando en el puerto ${port}`);
   console.log(`Para acceder desde la red local: http://localhost:${port}`);
+  console.log(`Datos almacenados en: ${DATA_DIR}`);
 });
