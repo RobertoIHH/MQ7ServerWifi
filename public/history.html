@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Historial de Sensor MQ7 - WiFi</title>
+    <link rel="stylesheet" href="styles.css">
+    <style>
+        .history-container {
+            margin-top: 20px;
+        }
+        
+        .date-selector {
+            margin-bottom: 20px;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        
+        select {
+            padding: 8px;
+            border-radius: 4px;
+            border: 1px solid var(--border-color);
+        }
+        
+        .summary-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 20px;
+        }
+        
+        .summary-table th, .summary-table td {
+            border: 1px solid var(--border-color);
+            padding: 8px;
+            text-align: left;
+        }
+        
+        .summary-table th {
+            background-color: var(--light-bg);
+        }
+        
+        .summary-table tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+        
+        .download-button {
+            margin-top: 10px;
+            margin-bottom: 20px;
+        }
+        
+        .nav-links {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 20px;
+        }
+        
+        .nav-links a {
+            color: var(--primary-color);
+            text-decoration: none;
+        }
+        
+        .nav-links a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Historial de Mediciones de Gas</h1>
+        </div>
+        
+        <div class="nav-links">
+            <a href="/">← Volver al Monitor en Tiempo Real</a>
+        </div>
+        
+        <div class="history-container">
+            <div class="date-selector">
+                <label for="date-select">Seleccionar fecha:</label>
+                <select id="date-select">
+                    <option value="">Cargando fechas disponibles...</option>
+                </select>
+            </div>
+            
+            <div id="summary-container">
+                <h2>Resumen del día <span id="selected-date"></span></h2>
+                <table class="summary-table" id="summary-table">
+                    <thead>
+                        <tr>
+                            <th>Tipo de Gas</th>
+                            <th>Cantidad de Mediciones</th>
+                            <th>Valor Mínimo (ppm)</th>
+                            <th>Valor Máximo (ppm)</th>
+                            <th>Promedio (ppm)</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td colspan="5">Seleccione una fecha para ver el resumen</td>
+                        </tr>
+                    </tbody>
+                </table>
+                
+                <button id="download-data" class="button download-button" disabled>Descargar Datos Completos</button>
+            </div>
+            
+            <div>
+                <h2>Gráfico de Mediciones:</h2>
+                <div class="chart-container">
+                    <canvas id="history-chart"></canvas>
+                </div>
+            </div>
+            
+            <div class="messages" id="messages">
+                Seleccione una fecha para ver el historial de mediciones.
+            </div>
+        </div>
+    </div>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.7.1/chart.min.js"></script>
+    <script>
+        // Colores para cada tipo de gas
+        const gasColors = {
+            'CO': '#3366CC',
+            'H2': '#DC3912',
+            'LPG': '#FF9900',
+            'CH4': '#109618',
+            'ALCOHOL': '#990099',
+            'unknown': '#666666'
+        };
+        
+        let historyChart = null;
+        
+        // Cargar lista de fechas disponibles
+        async function loadDates() {
+            try {
+                const response = await fetch('/api/history/dates');
+                const data = await response.json();
+                
+                const dateSelect = document.getElementById('date-select');
+                dateSelect.innerHTML = '';
+                
+                if (data.dates && data.dates.length > 0) {
+                    // Agregar opción de seleccionar
+                    const defaultOption = document.createElement('option');
+                    defaultOption.value = '';
+                    defaultOption.textContent = 'Seleccione una fecha...';
+                    dateSelect.appendChild(defaultOption);
+                    
+                    // Agregar cada fecha disponible
+                    data.dates.forEach(date => {
+                        const option = document.createElement('option');
+                        option.value = date;
+                        
+                        // Formatear la fecha para mostrar (DD/MM/YYYY)
+                        const [year, month, day] = date.split('-');
+                        option.textContent = `${day}/${month}/${year}`;
+                        
+                        dateSelect.appendChild(option);
+                    });
+                    
+                    // Habilitar el selector
+                    dateSelect.disabled = false;
+                    
+                    // Cargar la fecha más reciente por defecto
+                    if (data.dates.length > 0) {
+                        dateSelect.value = data.dates[0];
+                        loadDateData(data.dates[0]);
+                    }
+                } else {
+                    // No hay fechas disponibles
+                    const option = document.createElement('option');
+                    option.value = '';
+                    option.textContent = 'No hay datos históricos disponibles';
+                    dateSelect.appendChild(option);
+                    dateSelect.disabled = true;
+                    
+                    addMessage('No se encontraron datos históricos');
+                }
+            } catch (error) {
+                console.error('Error al cargar fechas:', error);
+                addMessage('Error al cargar las fechas disponibles');
+            }
+        }
+        
+        // Cargar datos de una fecha específica
+        async function loadDateData(date) {
+            if (!date) return;
+            
+            document.getElementById('selected-date').textContent = formatDate(date);
+            addMessage(`Cargando datos del ${formatDate(date)}...`);
+            
+            try {
+                // Cargar resumen
+                const summaryResponse = await fetch(`/api/history/${date}/summary`);
+                const summaryData = await summaryResponse.json();
+                
+                if (summaryData.summary) {
+                    updateSummaryTable(summaryData.summary);
+                }
+                
+                // Cargar datos completos para el gráfico
+                const detailResponse = await fetch(`/api/history/${date}`);
+                const detailData = await detailResponse.json();
+                
+                if (detailData.data && detailData.data.length > 0) {
+                    updateChart(detailData.data, date);
+                    document.getElementById('download-data').disabled = false;
+                } else {
+                    addMessage('No hay datos detallados para esta fecha');
+                    document.getElementById('download-data').disabled = true;
+                    if (historyChart) {
+                        historyChart.destroy();
+                        historyChart = null;
+                    }
+                }
+            } catch (error) {
+                console.error('Error al cargar datos:', error);
+                addMessage('Error al cargar los datos históricos');
+            }
+        }
+        
+        // Actualizar la tabla de resumen
+        function updateSummaryTable(summary) {
+            const tableBody = document.querySelector('#summary-table tbody');
+            tableBody.innerHTML = '';
+            
+            const gasTypes = Object.keys(summary);
+            
+            if (gasTypes.length === 0) {
+                const row = document.createElement('tr');
+                row.innerHTML = '<td colspan="5">No hay datos disponibles para esta fecha</td>';
+                tableBody.appendChild(row);
+                return;
+            }
+            
+            gasTypes.forEach(gasType => {
+                const data = summary[gasType];
+                const row = document.createElement('tr');
+                
+                row.innerHTML = `
+                    <td>${gasType}</td>
+                    <td>${data.count}</td>
+                    <td>${data.min}</td>
+                    <td>${data.max}</td>
+                    <td>${data.avg}</td>
+                `;
+                
+                tableBody.appendChild(row);
+            });
+        }
+        
+        // Actualizar el gráfico con los datos históricos
+        function updateChart(data, date) {
+            const ctx = document.getElementById('history-chart').getContext('2d');
+            
+            // Destruir gráfico existente si hay uno
+            if (historyChart) {
+                historyChart.destroy();
+            }
+            
+            // Organizar datos por tipo de gas
+            const gasSeries = {};
+            const timestamps = [];
+            const displayTimes = [];
+            
+            // Extraer todas las marcas de tiempo y organizarlas
+            data.forEach(record => {
+                const timestamp = new Date(record.timestamp);
+                
+                if (!isNaN(timestamp)) {
+                    timestamps.push(timestamp);
+                    
+                    // Formato de hora para etiquetas (HH:MM:SS)
+                    const timeStr = timestamp.toTimeString().substring(0, 8);
+                    displayTimes.push(timeStr);
+                    
+                    // Organizar datos por tipo de gas
+                    const gasType = record.gasType || 'unknown';
+                    
+                    if (!gasSeries[gasType]) {
+                        gasSeries[gasType] = [];
+                    }
+                    
+                    gasSeries[gasType].push({
+                        x: timestamp,
+                        y: parseFloat(record.ppm) || 0
+                    });
+                }
+            });
+            
+            // Preparar datasets para el gráfico
+            const datasets = [];
+            
+            Object.keys(gasSeries).forEach(gasType => {
+                // Ordenar puntos por tiempo
+                gasSeries[gasType].sort((a, b) => a.x - b.x);
+                
+                datasets.push({
+                    label: `${gasType} (ppm)`,
+                    data: gasSeries[gasType],
+                    borderColor: gasColors[gasType] || '#666666',
+                    backgroundColor: 'rgba(0, 0, 0, 0)',
+                    borderWidth: 2,
+                    tension: 0.4,
+                    pointRadius: 3
+                });
+            });
+            
+            // Crear nuevo gráfico
+            historyChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    datasets: datasets
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: {
+                            type: 'time',
+                            time: {
+                                unit: 'hour',
+                                displayFormats: {
+                                    hour: 'HH:mm'
+                                }
+                            },
+                            title: {
+                                display: true,
+                                text: 'Hora'
+                            }
+                        },
+                        y: {
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: 'Concentración (ppm)'
+                            }
+                        }
+                    },
+                    plugins: {
+                        title: {
+                            display: true,
+                            text: `Mediciones del ${formatDate(date)}`
+                        },
+                        legend: {
+                            position: 'top',
+                        }
+                    }
+                }
+            });
+            
+            // Actualizar mensaje
+            const totalPoints = data.length;
+            addMessage(`Mostrando ${totalPoints} mediciones del ${formatDate(date)}`);
+        }
+        
+        // Formatear fecha YYYY-MM-DD a DD/MM/YYYY
+        function formatDate(dateStr) {
+            if (!dateStr) return '';
+            
+            const [year, month, day] = dateStr.split('-');
+            return `${day}/${month}/${year}`;
+        }
+        
+        // Añadir mensaje a la sección de mensajes
+        function addMessage(text) {
+            const messages = document.getElementById('messages');
+            const date = new Date();
+            const timestamp = date.toLocaleTimeString();
+            messages.innerHTML = `[${timestamp}] ${text}`;
+        }
+        
+        // Configurar descarga de datos
+        document.getElementById('download-data').addEventListener('click', async () => {
+            const date = document.getElementById('date-select').value;
+            if (!date) return;
+            
+            try {
+                const response = await fetch(`/api/history/${date}`);
+                const data = await response.json();
+                
+                if (data.data && data.data.length > 0) {
+                    // Crear blob con los datos en formato JSON
+                    const blob = new Blob([JSON.stringify(data.data, null, 2)], { type: 'application/json' });
+                    const url = URL.createObjectURL(blob);
+                    
+                    // Crear enlace de descarga
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `sensor-data-${date}.json`;
+                    a.click();
+                    
+                    // Liberar URL
+                    setTimeout(() => URL.revokeObjectURL(url), 100);
+                    
+                    addMessage(`Descargando datos del ${formatDate(date)}...`);
+                }
+            } catch (error) {
+                console.error('Error al descargar datos:', error);
+                addMessage('Error al descargar los datos');
+            }
+        });
+        
+        // Configurar selector de fecha
+        document.getElementById('date-select').addEventListener('change', (e) => {
+            const date = e.target.value;
+            if (date) {
+                loadDateData(date);
+            } else {
+                // Resetear la vista si no se selecciona fecha
+                document.getElementById('selected-date').textContent = '';
+                document.getElementById('summary-table').querySelector('tbody').innerHTML = 
+                    '<tr><td colspan="5">Seleccione una fecha para ver el resumen</td></tr>';
+                document.getElementById('download-data').disabled = true;
+                
+                if (historyChart) {
+                    historyChart.destroy();
+                    historyChart = null;
+                }
+                
+                addMessage('Seleccione una fecha para ver el historial de mediciones');
+            }
+        });
+        
+        // Cargar fechas al iniciar
+        document.addEventListener('DOMContentLoaded', loadDates);
+    </script>
+</body>
+</html>

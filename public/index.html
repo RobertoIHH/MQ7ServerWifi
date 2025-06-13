@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Monitor de Sensor MQ7 - WiFi</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Monitor Multisensor de Gases</h1>
+            <div class="nav-links">
+                <a href="/history.html" class="history-link">Ver Historial de Mediciones</a>
+            </div>
+        </div>
+        
+        <div class="status-bar">
+            <div id="status-indicator" class="status-indicator disconnected"></div>
+            <span id="status-text">Desconectado</span>
+            <span id="status-message" style="margin-left: auto;"></span>
+        </div>
+        
+        <div class="data-panel">
+            <div class="data-row">
+                <span class="data-label">Gas actual:</span>
+                <div>
+                    <span id="current-gas" class="data-value">CO</span>
+                    <span id="gas-badge" class="gas-badge" style="background-color: var(--co-color);">CO</span>
+                    <span id="changing-indicator" class="changing-indicator" style="display: none;"></span>
+                </div>
+            </div>
+            <div class="data-row">
+                <span class="data-label">ADC:</span>
+                <span id="adc-value" class="data-value">0</span>
+            </div>
+            <div class="data-row">
+                <span class="data-label">Voltaje:</span>
+                <span id="voltage-value" class="data-value">0.00 V</span>
+            </div>
+            <div class="data-row">
+                <span class="data-label">Resistencia (Rs):</span>
+                <span id="rs-value" class="data-value">0.00 KΩ</span>
+            </div>
+            <div class="data-row">
+                <span class="data-label">Rs/R0:</span>
+                <span id="rs-ro-value" class="data-value">0.00</span>
+            </div>
+            <div class="data-row">
+                <span class="data-label">PPM:</span>
+                <span id="ppm-value" class="data-value">0.00 ppm</span>
+            </div>
+        </div>
+        
+        <!-- Panel de timestamps -->
+        <div class="timestamp-panel">
+            <h2>Información temporal de mediciones</h2>
+            <div class="timestamp-row">
+                <div>
+                    <div class="timestamp-label">Valor Mínimo:</div>
+                    <div id="min-value-data" class="timestamp-data">0.00 ppm</div>
+                </div>
+                <div class="timestamp-value" id="min-timestamp">--/--/---- --:--:--</div>
+            </div>
+            <div class="timestamp-row">
+                <div>
+                    <div class="timestamp-label">Valor Máximo:</div>
+                    <div id="max-value-data" class="timestamp-data">0.00 ppm</div>
+                </div>
+                <div class="timestamp-value" id="max-timestamp">--/--/---- --:--:--</div>
+            </div>
+            <div class="timestamp-row">
+                <div>
+                    <div class="timestamp-label">Última Medición:</div>
+                    <div id="last-value-data" class="timestamp-data">0.00 ppm</div>
+                </div>
+                <div class="timestamp-value" id="last-timestamp">--/--/---- --:--:--</div>
+            </div>
+        </div>
+        
+        <div class="gas-selector">
+            <h2>Seleccionar gas a medir:</h2>
+            <div class="gas-buttons">
+                <button id="gas-co" class="gas-button co" data-gas="CO">CO</button>
+                <button id="gas-h2" class="gas-button h2" data-gas="H2">H2</button>
+                <button id="gas-lpg" class="gas-button lpg" data-gas="LPG">LPG</button>
+                <button id="gas-ch4" class="gas-button ch4" data-gas="CH4">CH4</button>
+                <button id="gas-alcohol" class="gas-button alcohol" data-gas="ALCOHOL">ALCOHOL</button>
+            </div>
+        </div>
+        
+        <div>
+            <h2>Gráfico en tiempo real:</h2>
+            <div class="chart-container">
+                <canvas id="real-time-chart"></canvas>
+            </div>
+        </div>
+        
+        <div class="messages" id="messages">
+            Esperando conexión con el sensor...
+        </div>
+    </div>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.7.1/chart.min.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>
